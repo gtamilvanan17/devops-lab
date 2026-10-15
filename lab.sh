@@ -137,9 +137,75 @@ BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 RED=$'\033[1;31m'; GREEN=$'\033[1;32m'; YELLOW=$'\033[1;33m'
 BLUE=$'\033[1;34m'; MAGENTA=$'\033[1;35m'; CYAN=$'\033[1;36m'
 
-log()  { printf '%s==>%s %s\n' "$BLUE" "$RESET" "$*"; }
-warn() { printf '%sWARN:%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
-die()  { printf '%sERROR:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+STEP=0            # current step number (see step())
+TOTAL_STEPS=0     # how many steps the running command has
+T0=$SECONDS       # when the script started (for the "finished in" message)
+
+log()  { printf ' %s▸%s %s\n' "$BLUE" "$RESET" "$*"; }                  # progress message
+ok()   { printf ' %s✔%s %s\n' "$GREEN" "$RESET" "$*"; }                 # something finished
+tip()  { printf ' %s💡 %s%s\n' "$DIM" "$*" "$RESET"; }                  # friendly hint
+warn() { printf ' %s⚠  %s%s\n' "$YELLOW" "$*" "$RESET" >&2; }          # not fatal
+die()  { printf ' %s✘ ERROR:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }  # fatal
+
+# step "text" : prints a section header such as  ━━ [3/9] text
+step() {
+  STEP=$((STEP + 1))
+  printf '\n%s━━ [%d/%d]%s %s%s%s\n' "$CYAN" "$STEP" "$TOTAL_STEPS" "$RESET" "$BOLD" "$*" "$RESET"
+}
+
+# 75 -> "1m 15s"
+fmt_time() {
+  local s="$1"
+  if (( s >= 60 )); then printf '%dm %02ds' $((s / 60)) $((s % 60)); else printf '%ds' "$s"; fi
+}
+
+# spin "what is happening" command args...
+# Runs a slow command in the background and shows a spinner, a running timer and
+# the last line of its output, so you can see it is alive. The full output is
+# hidden on success and printed when the command fails.
+spin() {
+  local title="$1"; shift
+  local logf pid hint rc=0 start=$SECONDS i=0
+  local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+  logf="$(mktemp "${TMPDIR:-/tmp}/lab.XXXXXX")"
+
+  # ( trap - ERR; ... ) keeps the global error trap from adding noise to the log
+  ( trap - ERR; "$@" ) >"$logf" 2>&1 &
+  pid=$!
+
+  if [[ -t 1 ]]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      hint="$(tail -n 1 "$logf" 2>/dev/null | tr -d '\r' | tr -cd '[:print:]' | cut -c1-46 || true)"
+      printf '\r\033[K %s%s%s %s %s[%s]%s %s%s%s' "$MAGENTA" "${frames[i % 10]}" "$RESET" \
+        "$title" "$DIM" "$(fmt_time $((SECONDS - start)))" "$RESET" "$DIM" "$hint" "$RESET"
+      i=$((i + 1)); sleep 0.12
+    done
+    printf '\r\033[K'
+  else
+    log "${title}..."          # no terminal (CI, pipe): plain line, no animation
+  fi
+
+  wait "$pid" || rc=$?
+  if (( rc == 0 )); then
+    ok "${title} ${DIM}($(fmt_time $((SECONDS - start))))${RESET}"
+  else
+    printf ' %s✘%s %s %sfailed after %s%s. Last output:\n' "$RED" "$RESET" "$title" "$DIM" "$(fmt_time $((SECONDS - start)))" "$RESET" >&2
+    tail -n 25 "$logf" | sed 's/^/     /' >&2
+  fi
+  rm -f "$logf"
+  return "$rc"
+}
+
+# The big logo shown at the start of every command.
+print_header() {
+  printf '\n%s' "$MAGENTA"
+  cat <<'EOF'
+   ╺┳┓┏━╸╻ ╻┏━┓┏━┓┏━┓   ╻  ┏━┓┏┓
+    ┃┃┣╸ ┃┏┛┃ ┃┣━┛┗━┓   ┃  ┣━┫┣┻┓
+   ╺┻┛┗━╸┗┛ ┗━┛╹  ┗━┛   ┗━╸╹ ╹┗━┛
+EOF
+  printf '%s   Your local DevOps playground  ·  v%s%s\n' "$DIM" "$LAB_VERSION" "$RESET"
+}
 
 # If anything fails unexpectedly, say which line broke.
 trap 'die "failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
@@ -518,25 +584,35 @@ EOF
 # Add a `lab` shortcut to ~/.zshrc so you can type `lab start` from anywhere.
 install_alias() {
   chmod +x "$SELF"
-  local rc="${HOME}/.zshrc"
+  local rc="${HOME}/.zshrc" want="alias lab='${SELF}'"
   touch "$rc"
-  if ! grep -q "alias lab=" "$rc"; then
-    echo "alias lab='${SELF}'" >> "$rc"
-    log "Added alias 'lab' to ~/.zshrc (run: source ~/.zshrc)"
+  if ! grep -q "^alias lab=" "$rc"; then
+    echo "$want" >> "$rc"
+    ok "Added the 'lab' shortcut to ~/.zshrc"
+    tip "Run 'source ~/.zshrc' (or open a new terminal) to use it."
+  elif ! grep -qxF "$want" "$rc"; then
+    # An old alias points at a different copy of the script (for example an older
+    # version that put Jenkins inside Kubernetes). Repoint it, keeping a backup.
+    cp "$rc" "${rc}.lab-backup"
+    awk -v w="$want" '/^alias lab=/ { print w; next } { print }' "${rc}.lab-backup" > "$rc"
+    ok "Updated the 'lab' shortcut in ~/.zshrc (backup: ~/.zshrc.lab-backup)"
+    tip "It used to point at an older copy. Run 'source ~/.zshrc' (or open a new terminal)."
   fi
 }
 
 # ---------------------------------------------------------------------------
 # 5. CLUSTER HELPERS
 # ---------------------------------------------------------------------------
-wait_for_api() {
-  log "Waiting for the Kubernetes API..."
+api_ready() {
   local i
   for i in $(seq 1 60); do
-    if kubectl --context "$CTX" get nodes >/dev/null 2>&1; then return 0; fi
+    kubectl --context "$CTX" get nodes >/dev/null 2>&1 && return 0
     sleep 3
   done
-  die "Kubernetes API did not come up in time."
+  return 1
+}
+wait_for_api() {
+  spin "Waiting for the Kubernetes API" api_ready || die "Kubernetes API did not come up in time."
 }
 
 # verify_nodeport <namespace> <service> <expected nodePort>
@@ -571,10 +647,11 @@ check_monitoring_nodeports() {
 }
 
 wait_for_cluster_workloads() {
-  log "Waiting for cluster pods (non-fatal, can take a few minutes)..."
-  kubectl --context "$CTX" -n monitoring wait --for=condition=Available deployment --all --timeout=300s \
+  spin "Waiting for monitoring pods" kubectl --context "$CTX" -n monitoring wait \
+    --for=condition=Available deployment --all --timeout=300s \
     || warn "Monitoring is not fully ready yet; check with: lab status"
-  kubectl --context "$CTX" -n argocd wait --for=condition=Available deployment --all --timeout=300s \
+  spin "Waiting for ArgoCD pods" kubectl --context "$CTX" -n argocd wait \
+    --for=condition=Available deployment --all --timeout=300s \
     || warn "ArgoCD is not fully ready yet; check with: lab status"
 }
 
@@ -591,6 +668,15 @@ argocd_password() {
 # Log the argocd CLI in from your Mac AND from inside the Jenkins container,
 # then show which clusters ArgoCD manages. ArgoCD registers the cluster it runs
 # in automatically as "in-cluster" (https://kubernetes.default.svc).
+argocd_ready() {
+  local i
+  for i in $(seq 1 40); do
+    curl -fs -o /dev/null -m 3 "http://127.0.0.1:${ARGOCD_PORT}/healthz" && return 0
+    sleep 3
+  done
+  return 1
+}
+
 connect_argocd() {
   local pw i
   pw="$(argocd_password)"
@@ -599,16 +685,12 @@ connect_argocd() {
     return 0
   fi
 
-  log "Waiting for the ArgoCD API..."
-  for i in $(seq 1 40); do
-    curl -fs -o /dev/null -m 3 "http://127.0.0.1:${ARGOCD_PORT}/healthz" && break
-    sleep 3
-  done
+  spin "Waiting for the ArgoCD API" argocd_ready || true
 
   # 1) from your Mac, through the published port
   if argocd login "localhost:${ARGOCD_PORT}" --username "$ARGOCD_USER" --password "$pw" \
        --plaintext --grpc-web >/dev/null 2>&1; then
-    log "argocd CLI on your Mac is logged in (localhost:${ARGOCD_PORT})."
+    ok "argocd CLI on your Mac is logged in (localhost:${ARGOCD_PORT})."
     argocd cluster list --grpc-web 2>/dev/null | sed 's/^/   /' || true
   else
     warn "argocd CLI login from the Mac failed; try: argocd login localhost:${ARGOCD_PORT} --plaintext --grpc-web"
@@ -617,7 +699,7 @@ connect_argocd() {
   # 2) from Jenkins, over the shared Docker network (straight to the NodePort)
   if jenkins_running && docker exec "$JENKINS_CT" argocd login "${NODE}:${ARGOCD_NODEPORT}" \
        --username "$ARGOCD_USER" --password "$pw" --plaintext --grpc-web >/dev/null 2>&1; then
-    log "argocd CLI inside Jenkins is logged in (${NODE}:${ARGOCD_NODEPORT})."
+    ok "argocd CLI inside Jenkins is logged in (${NODE}:${ARGOCD_NODEPORT})."
   else
     warn "argocd CLI login from the Jenkins container failed (is Jenkins running?)."
   fi
@@ -656,7 +738,7 @@ refresh_gitops() {
 
 # The in-cluster git server that serves the snapshot repo.
 install_git_server() {
-  log "Installing the in-cluster git server (lab-git)..."
+  log "Starting lab-git, the tiny in-cluster git server that serves your gitops/ folder..."
   kubectl --context "$CTX" apply -f - >/dev/null <<'EOF'
 apiVersion: v1
 kind: Namespace
@@ -706,7 +788,7 @@ spec:
   selector: {app: lab-git}
   ports: [{port: 9418, targetPort: 9418}]
 EOF
-  kubectl --context "$CTX" -n lab-git rollout status deploy/lab-git --timeout=180s \
+  spin "Waiting for lab-git to be ready" kubectl --context "$CTX" -n lab-git rollout status deploy/lab-git --timeout=180s \
     || warn "lab-git is not ready yet; check: kubectl -n lab-git get pods"
 }
 
@@ -769,8 +851,8 @@ jenkins_running() {
 }
 
 build_jenkins_image() {
-  log "Building Jenkins image (first build takes a few minutes)..."
-  docker build -t "$JENKINS_IMG" "${LAB_DIR}/jenkins"
+  spin "Building the Jenkins image (first build takes a few minutes)" \
+    docker build -t "$JENKINS_IMG" "${LAB_DIR}/jenkins"
 }
 
 create_jenkins() {
@@ -840,22 +922,24 @@ sync_jenkins_kubeconfig() {
   docker cp "$f" "${JENKINS_CT}:/var/jenkins_home/.kube/config"
   rm -f "$f"
   if docker exec "$JENKINS_CT" kubectl get nodes >/dev/null 2>&1; then
-    log "Jenkins container can reach the cluster (kubectl OK)."
+    ok "Jenkins container can reach the cluster (kubectl OK)."
   else
     warn "Jenkins container could not reach the cluster yet; retry: lab start"
   fi
 }
 
-wait_for_jenkins() {
-  log "Waiting for Jenkins (first boot can take 2-4 min)..."
+jenkins_ready() {
   local i code
   for i in $(seq 1 120); do
     code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${JENKINS_PORT}/login" || true)"
-    if [[ "$code" == "200" ]]; then log "Jenkins is up."; return 0; fi
+    [[ "$code" == "200" ]] && return 0
     sleep 3
   done
-  warn "Jenkins is not answering yet; check logs: docker logs -f ${JENKINS_CT}"
-  return 0
+  return 1
+}
+wait_for_jenkins() {
+  spin "Waiting for Jenkins to boot (first start: 2-4 min)" jenkins_ready \
+    || warn "Jenkins is not answering yet; check logs: docker logs -f ${JENKINS_CT}"
 }
 
 # ---------------------------------------------------------------------------
@@ -885,9 +969,9 @@ print_banner() {
   pw="$(argocd_password)"
   [[ -n "$pw" ]] || pw="(see lab status)"
 
+  local title="  DevOps Lab v${LAB_VERSION}  |  Jenkins - ArgoCD - Prometheus - Grafana - kind"
   printf '\n%s╔══════════════════════════════════════════════════════════════════════════════╗%s\n' "$MAGENTA" "$RESET"
-  printf '%s║%s  %sDevOps Lab v%s%s   Jenkins · ArgoCD · Prometheus · Grafana · kind                %s║%s\n' \
-    "$MAGENTA" "$RESET" "$BOLD" "$LAB_VERSION" "$RESET" "$MAGENTA" "$RESET"
+  printf '%s║%s%s%-78s%s%s║%s\n' "$MAGENTA" "$RESET" "$BOLD" "$title" "$RESET" "$MAGENTA" "$RESET"
   printf '%s╚══════════════════════════════════════════════════════════════════════════════╝%s\n' "$MAGENTA" "$RESET"
   printf ' %s%-13s %-24s %-27s %-7s  %s%s\n' "$DIM" "TOOL" "URL" "LOGIN" "STATUS" "RUNS IN" "$RESET"
   row "Jenkins"      "http://localhost:${JENKINS_PORT}"      "${JENKINS_USER} / ${JENKINS_PASS}"  "http://127.0.0.1:${JENKINS_PORT}/login"        "Docker container"
@@ -901,10 +985,10 @@ print_banner() {
     printf ' %s%-13s%s %-24s\n' "$BOLD" "Spare" "$RESET" "localhost:${SPARE_PORT}  ->  NodePort ${SPARE_NODEPORT}"
   fi
   printf '%s──────────────────────────────────────────────────────────────────────────────%s\n' "$MAGENTA" "$RESET"
-  printf ' %sK8s API%s      https://127.0.0.1:${API_PORT}   (context: %s)\n' "$BOLD" "$RESET" "$CTX"
-  printf ' %sJenkins data%s %s\n' "$BOLD" "$RESET" "$JENKINS_HOME_DIR"
-  printf ' %sGitOps folder%s %s   (edit, then: lab sync)\n' "$BOLD" "$RESET" "$GITOPS_DIR"
-  printf ' %sConfigs%s      %s\n' "$BOLD" "$RESET" "$LAB_DIR"
+  printf ' %s%-14s%s https://127.0.0.1:%s   (context: %s)\n' "$BOLD" "K8s API" "$RESET" "$API_PORT" "$CTX"
+  printf ' %s%-14s%s %s\n' "$BOLD" "Jenkins data" "$RESET" "$JENKINS_HOME_DIR"
+  printf ' %s%-14s%s %s   (edit, then: lab sync)\n' "$BOLD" "GitOps folder" "$RESET" "$GITOPS_DIR"
+  printf ' %s%-14s%s %s\n' "$BOLD" "Configs" "$RESET" "$LAB_DIR"
   printf '%s──────────────────────────────────────────────────────────────────────────────%s\n\n' "$MAGENTA" "$RESET"
 }
 
@@ -935,13 +1019,17 @@ print_summary() {
 # 9. COMMANDS
 # ---------------------------------------------------------------------------
 cmd_up() {
+  TOTAL_STEPS=9
+
+  step "Checking your Mac 🔍"
   ensure_tools
   ensure_docker
   check_docker_resources
   write_configs
   sync_gitops          # the snapshot folder must exist before kind mounts it
-  install_alias
+  ok "Prerequisites and config files are ready."
 
+  step "Creating the Kubernetes cluster ☸️"
   if cluster_exists; then
     log "Cluster '${CLUSTER}' already exists, making sure it is running..."
     docker start "$NODE" >/dev/null 2>&1 || true
@@ -956,55 +1044,65 @@ cmd_up() {
     local p
     for p in "$API_PORT" "$ARGOCD_PORT" "$GRAFANA_PORT" "$PROMETHEUS_PORT" "$ALERTMANAGER_PORT" "$SPARE_PORT"; do
       if port_in_use "$p"; then
-        die "Port ${p} is already in use on your Mac. Free it, or edit the ports at the top of lab.sh."
+        die "Port ${p} is already in use on your Mac. Free it, or change it in lab.env."
       fi
     done
-    log "Creating kind cluster '${CLUSTER}'..."
-    kind create cluster --config "${LAB_DIR}/kind-config.yaml" --wait 180s
+    spin "Creating kind cluster '${CLUSTER}'" kind create cluster --config "${LAB_DIR}/kind-config.yaml" --wait 180s
   fi
-
   kubectl config use-context "$CTX" >/dev/null
   wait_for_api
 
-  log "Adding Helm repos..."
-  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
-  helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
-  helm repo update >/dev/null
+  step "Adding Helm repositories 📦"
+  spin "Fetching chart indexes" bash -c "
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update &&
+    helm repo add argo https://argoproj.github.io/argo-helm --force-update &&
+    helm repo update"
 
   # Monitoring first: it installs the ServiceMonitor CRDs that ArgoCD metrics need.
-  log "Installing Prometheus + Grafana + Alertmanager (kube-prometheus-stack)..."
-  helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+  step "Installing the monitoring stack 📈  (Prometheus, Grafana, Alertmanager)"
+  tip "This is the slowest part: many images to pull. Usually 3-8 minutes."
+  spin "Installing kube-prometheus-stack" helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
     --kube-context "$CTX" -n monitoring --create-namespace \
     -f "${LAB_DIR}/monitoring-values.yaml" \
     --wait --timeout 10m \
-    || warn "Monitoring install did not finish within the timeout; it may still be starting."
+    || warn "Monitoring did not finish within the timeout; it may still be starting."
   kubectl --context "$CTX" get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1 \
     || die "Prometheus CRDs are missing; monitoring install failed. Check: helm -n monitoring status monitoring"
   check_monitoring_nodeports
 
-  log "Installing ArgoCD..."
-  helm upgrade --install argocd argo/argo-cd \
+  step "Installing ArgoCD 🐙"
+  spin "Installing ArgoCD" helm upgrade --install argocd argo/argo-cd \
     --kube-context "$CTX" -n argocd --create-namespace \
     -f "${LAB_DIR}/argocd-values.yaml" \
     --wait --timeout 10m
   ensure_argocd_nodeport
 
+  step "Building the Jenkins image 🏗️  (runs in Docker, outside Kubernetes)"
   build_jenkins_image
+
+  step "Starting Jenkins 🚀"
   reconcile_jenkins
   sync_jenkins_kubeconfig
   wait_for_jenkins
 
-  # Connect ArgoCD to the cluster, to your Mac's CLI and to Jenkins.
+  step "Connecting ArgoCD to the cluster, your CLI and Jenkins 🔗"
   connect_argocd
-  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then deploy_gitops; fi
 
-  log "Setup complete."
+  step "Deploying the demo apps through ArgoCD 🎁"
+  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then
+    deploy_gitops
+  else
+    log "Skipped (DEPLOY_SAMPLE_APP=false in lab.env)."
+  fi
+
+  printf '\n%s🎉 Your DevOps Lab is ready!%s  %s(finished in %s)%s\n' "$GREEN" "$RESET" "$DIM" "$(fmt_time $((SECONDS - T0)))" "$RESET"
   print_summary
   cat <<EOF
-Next:
-  source ~/.zshrc        # enables the 'lab' alias
+Next steps:
+  source ~/.zshrc        # enables the 'lab' shortcut (once)
   k9s                    # browse the cluster
   lab verify             # see where everything runs
+  lab sync               # push edits from gitops/ to ArgoCD
   lab stop / lab start   # daily use
 
 Jenkins pipelines can use 'agent any' and call docker, kubectl, helm and argocd.
@@ -1012,33 +1110,41 @@ EOF
 }
 
 cmd_start() {
+  TOTAL_STEPS=4
+
+  step "Waking up the cluster ☸️"
   ensure_docker
   cluster_exists || die "Cluster '${CLUSTER}' not found. Run: lab up"
-  log "Starting cluster container..."
   docker start "$NODE" >/dev/null
   kubectl config use-context "$CTX" >/dev/null
   wait_for_api
-  kubectl --context "$CTX" wait --for=condition=Ready node --all --timeout=180s
+  spin "Waiting for the node to be Ready" kubectl --context "$CTX" wait --for=condition=Ready node --all --timeout=180s
 
-  log "Starting Jenkins container..."
+  step "Starting Jenkins 🚀"
   docker image inspect "$JENKINS_IMG" >/dev/null 2>&1 || { write_configs; build_jenkins_image; }
   reconcile_jenkins
   sync_jenkins_kubeconfig
 
+  step "Waiting for everything to be healthy 🩺"
   wait_for_cluster_workloads
   wait_for_jenkins
+
+  step "Reconnecting ArgoCD 🔗"
   connect_argocd
   if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then sync_gitops; refresh_gitops; fi
+
+  printf '\n%s☀️  Good to go!%s  %s(started in %s)%s\n' "$GREEN" "$RESET" "$DIM" "$(fmt_time $((SECONDS - T0)))" "$RESET"
   print_summary
 }
 
 cmd_stop() {
+  TOTAL_STEPS=2
   ensure_docker
-  log "Stopping Jenkins container..."
-  docker stop "$JENKINS_CT" >/dev/null 2>&1 || true
-  log "Stopping cluster container..."
-  docker stop "$NODE" >/dev/null 2>&1 || true
-  log "Stopped (all data preserved). Run 'lab start' to bring it back."
+  step "Stopping Jenkins 🛑"
+  spin "Stopping the Jenkins container" docker stop "$JENKINS_CT" || warn "Jenkins was not running."
+  step "Stopping the cluster 🛑"
+  spin "Stopping the cluster container" docker stop "$NODE" || warn "The cluster was not running."
+  printf '\n%s🌙 Lab stopped. All your data is safe.%s Run %slab start%s to bring it back.\n' "$GREEN" "$RESET" "$BOLD" "$RESET"
   print_summary
 }
 
@@ -1163,25 +1269,37 @@ print_destroy_plan() {
 
 cmd_destroy() {
   local purge="${1:-}"
+  TOTAL_STEPS=3
   ensure_docker
   print_destroy_plan "$purge"
   read -r -p "Type 'yes' to destroy the items above: " ans
   [[ "$ans" == "yes" ]] || { echo "Aborted. Nothing was changed."; exit 0; }
-  docker rm -f "$JENKINS_CT" >/dev/null 2>&1 || true
-  kind delete cluster --name "$CLUSTER" || true
+
+  step "Removing Jenkins 🗑️"
+  spin "Deleting the Jenkins container" docker rm -f "$JENKINS_CT" || true
+
+  step "Removing the cluster 🗑️"
+  spin "Deleting kind cluster '${CLUSTER}'" kind delete cluster --name "$CLUSTER" || true
+
+  step "Cleaning up 🧹"
   if [[ "$purge" == "--purge" ]]; then
-    log "Purging Jenkins data folder ${JENKINS_HOME_DIR}..."
     rm -rf "${JENKINS_HOME_DIR:?}"
+    ok "Deleted the Jenkins data folder ${JENKINS_HOME_DIR}"
   else
-    log "Jenkins data kept in ${JENKINS_HOME_DIR} (use 'lab destroy --purge' to wipe it)."
+    ok "Kept the Jenkins data folder ${JENKINS_HOME_DIR} ${DIM}(use 'lab destroy --purge' to wipe it)${RESET}"
   fi
-  log "Destroyed. The Jenkins image is kept as a build cache (docker rmi ${JENKINS_IMG} to remove)."
+  ok "Kept the Jenkins image ${JENKINS_IMG} as a build cache ${DIM}(docker rmi ${JENKINS_IMG} to remove)${RESET}"
+  printf '\n%s💥 Lab destroyed in %s.%s Start fresh with %slab up%s\n' "$GREEN" "$(fmt_time $((SECONDS - T0)))" "$RESET" "$BOLD" "$RESET"
   print_summary
 }
 
 # ---------------------------------------------------------------------------
 # 10. ENTRY POINT
 # ---------------------------------------------------------------------------
+case "${1:-}" in
+  up|start|stop|status|verify|sync|destroy) print_header; install_alias ;;
+esac
+
 case "${1:-}" in
   up)      cmd_up ;;
   start)   cmd_start ;;

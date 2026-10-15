@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Demo apps (`podinfo` (Helm) and `hello-web` (plain YAML)) deployed through ArgoCD by default, visible in the ArgoCD UI.
 - Local-folder GitOps: edit `gitops/` and run `lab sync`. A small in-cluster git server (`lab-git`) serves a snapshot of the folder to ArgoCD, so no GitHub is needed. One folder per app under `gitops/apps/<name>/` (Helm wrapper chart or plain YAML); an ApplicationSet (`lab-apps`) turns each folder into an ArgoCD app, so adding an app needs no extra file.
 - Reworked issue and pull request templates (forms).
+- Live spinner with elapsed timer for every slow step (cluster, Helm installs, image build, waits), numbered steps, friendlier messages and a logo header. Full output is shown only when a step fails.
+- README banner with DevOps, SRE and platform tool logos; rounded badges.
 - `lab destroy` lists what will be deleted and kept before asking for confirmation.
 - `lab.env` settings file (cluster name, ports, logins, Jenkins heap, sample-app toggle) with a global `~/.config/devops-lab/lab.env`, `lab init`, and validation of ports and cluster name.
 - `lab configs` command and `lab destroy --purge`.
@@ -23,6 +25,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Changed
 - Ports: Jenkins is on 8080 and ArgoCD on 8081 (previously swapped).
 - `lab.sh` works from any folder (no hard-coded path) and has beginner-friendly comments.
+
+### Fixed
+- Banner showed a literal `${API_PORT}`, and its right border was misaligned.
+- The `lab` shortcut kept pointing at an older copy of the script (which installed Jenkins inside Kubernetes). Every command now repoints it to the current script and keeps a backup of ~/.zshrc.
 
 ### Migration
 - The port layout changed, so run `lab destroy` then `lab up`.

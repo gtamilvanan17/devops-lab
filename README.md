@@ -4,12 +4,12 @@
 
 ### A complete local DevOps playground. One command up, one command down.
 
-![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-8b5cf6?style=for-the-badge&logo=apple&logoColor=white)
-![Kubernetes](https://img.shields.io/badge/kind-Kubernetes-22d3ee?style=for-the-badge&logo=kubernetes&logoColor=white)
-![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps-fb7185?style=for-the-badge&logo=argo&logoColor=white)
-![Jenkins](https://img.shields.io/badge/Jenkins-CI-fbbf24?style=for-the-badge&logo=jenkins&logoColor=black)
-![Grafana](https://img.shields.io/badge/Grafana-Dashboards-a3e635?style=for-the-badge&logo=grafana&logoColor=black)
-![License](https://img.shields.io/badge/license-MIT-ff3d9a?style=for-the-badge)
+![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-8b5cf6?style=flat&logo=apple&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/kind-Kubernetes-22d3ee?style=flat&logo=kubernetes&logoColor=white)
+![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps-fb7185?style=flat&logo=argo&logoColor=white)
+![Jenkins](https://img.shields.io/badge/Jenkins-CI-fbbf24?style=flat&logo=jenkins&logoColor=black)
+![Grafana](https://img.shields.io/badge/Grafana-Dashboards-a3e635?style=flat&logo=grafana&logoColor=black)
+![License](https://img.shields.io/badge/license-MIT-ff3d9a?style=flat)
 
 [Portfolio page](docs/index.html) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md)
 
@@ -189,3 +189,5 @@ Ideas and fixes are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, and 
 ## 📜 License
 
 MIT, see [LICENSE](LICENSE).
+
+Product names and logos in the banner belong to their respective owners and are used for identification only. Logo shapes come from the [Simple Icons](https://simpleicons.org) project (CC0).

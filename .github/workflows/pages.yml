@@ -5,7 +5,7 @@ name: deploy-portfolio
 
 on:
   push:
-    branches: [master]
+    # branches: [master]
     paths:
       - "docs/**"
       - ".github/workflows/pages.yml"
