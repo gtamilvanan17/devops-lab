@@ -27,8 +27,8 @@ pipeline {
         // and lab.sh logged the CLI in.
         sh 'argocd cluster list'
         sh 'argocd app list'
-        // Uncomment to sync the sample app:
-        // sh 'argocd app sync guestbook'
+        // Uncomment to sync a demo app:
+        // sh 'argocd app sync podinfo'
       }
     }
   }

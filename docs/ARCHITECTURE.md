@@ -52,9 +52,23 @@ sequenceDiagram
   Lab->>J: copy internal kubeconfig
   Lab->>A: argocd login (Mac CLI)
   Lab->>J: argocd login (inside Jenkins)
-  Lab->>K: apply guestbook Application
-  A->>K: sync guestbook (in-cluster)
+  Lab->>K: start lab-git server, register repo, create ApplicationSet lab-apps
+  A->>K: sync podinfo + hello-web (in-cluster)
 ```
+
+## GitOps from a local folder
+
+ArgoCD cannot read a plain folder, only a git repository, so the lab bridges the gap:
+
+1. You edit `./gitops` (apps, Helm values files, manifests).
+2. `lab sync` copies it into a git snapshot at `./.lab-git/gitops` and commits when something changed.
+3. That snapshot is mounted into the kind node at `/lab/git` (a kind `extraMounts` entry, set when the cluster is created).
+4. The `lab-git` Deployment (alpine/git, `git daemon`) serves it as `git://lab-git.lab-git.svc.cluster.local/gitops`.
+5. ArgoCD has that URL registered as a repository. An ApplicationSet named `lab-apps` (git directory generator on `apps/*`) creates one ArgoCD Application per folder. The folder name is the app name and the namespace, so adding, renaming or deleting a folder adds, renames or removes the app.
+
+Inside an app folder ArgoCD detects the type automatically: `Chart.yaml` means a Helm chart, plain `*.yaml` files mean raw manifests. `podinfo` is a small wrapper chart whose only job is to depend on the public podinfo chart, so its `values.yaml` sits in the same folder (settings go under the `podinfo:` key). `hello-web` is plain manifests.
+
+`lab sync` also triggers a hard refresh, otherwise ArgoCD would notice changes within its 3 minute poll. The `git://` transport is unauthenticated, which is fine because it is reachable only inside the cluster.
 
 ## Startup order
 `lab start` brings up the cluster first (Jenkins needs its network and API), then Jenkins. `lab stop` does the reverse.

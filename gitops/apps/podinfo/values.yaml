@@ -1,0 +1,11 @@
+# Your settings for podinfo. Everything goes under the "podinfo:" key,
+# because the chart above is a dependency of this wrapper chart.
+# Edit, run `lab sync`, watch ArgoCD roll it out.
+podinfo:
+  replicaCount: 1
+  ui:
+    message: "Hello from DevOps Lab"
+    color: "#6d8bff"
+  service:
+    type: NodePort
+    nodePort: 30090     # open it at http://localhost:9090

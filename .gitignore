@@ -12,3 +12,4 @@ lab-kubeconfig
 .vscode/
 *.swp
 lab.env
+.lab-git/

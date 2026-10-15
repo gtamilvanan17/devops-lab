@@ -1,0 +1,38 @@
+name: "✨ Feature request"
+description: Suggest an idea or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Have an idea to make the lab better? Tell us about it! 💡
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      placeholder: "I often need to ... but currently ..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should it work? Example commands or config are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [New tool in the stack, lab.sh command, lab.env setting, GitOps / demo apps, Jenkins, Monitoring, Docs / portfolio, CI / automation, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to work on it?
+      options: ["Yes, I can open a PR", "I can help test", "No, just suggesting"]

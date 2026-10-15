@@ -1,0 +1,81 @@
+name: "🐛 Bug report"
+description: Something in the lab does not work as expected
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! 🙏
+        Please check the [troubleshooting guide](../blob/main/docs/TROUBLESHOOTING.md) first.
+  - type: dropdown
+    id: command
+    attributes:
+      label: Which command failed?
+      options: [lab up, lab start, lab stop, lab status, lab sync, lab verify, lab destroy, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which tool is affected?
+      multiple: true
+      options: [Jenkins, ArgoCD, Prometheus, Grafana, Alertmanager, kind cluster, gitops folder / lab-git, lab.sh script, Portfolio page, Docs]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+      placeholder: "`lab up` stopped with ... but I expected ..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `lab status`
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: For example `docker logs lab-jenkins` or `kubectl -n argocd logs deploy/argocd-repo-server`.
+      render: shell
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: "macOS 15.1, M1"
+    validations:
+      required: true
+  - type: input
+    id: docker
+    attributes:
+      label: Docker runtime, version and memory limit
+      placeholder: "Docker Desktop 4.35, 8 GB"
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Your lab.env (remove passwords)
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues
+          required: true
+        - label: I tried `lab destroy && lab up` on a clean state (if safe)

@@ -1,7 +1,7 @@
 # Thin wrapper so you can type `make up` instead of `./lab.sh up`.
-.PHONY: up start stop status creds verify init configs destroy lint
+.PHONY: up start stop status creds verify sync init configs destroy lint
 
-up start stop status creds verify init configs:
+up start stop status creds verify sync init configs:
 	./lab.sh $@
 
 destroy:

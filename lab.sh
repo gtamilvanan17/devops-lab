@@ -32,6 +32,7 @@
 #   ./lab.sh status     show everything that is running
 #   ./lab.sh creds      show URLs and logins
 #   ./lab.sh verify     prove where each tool runs
+#   ./lab.sh sync       push edits from ./gitops to ArgoCD (no git needed)
 #   ./lab.sh init       create lab.env (your settings file) from the example
 #   ./lab.sh configs    (re)generate the config files only, touch nothing else
 #   ./lab.sh destroy    delete cluster + Jenkins container (keeps ./jenkins_wp)
@@ -95,7 +96,12 @@ KIND_NET="kind"                           # Docker network shared by kind and Je
 : "${ARGOCD_PORT:=8081}"                  # port on your Mac
 : "${ARGOCD_NODEPORT:=30080}"             # port on the kind node (ArgoCD service)
 : "${ARGOCD_USER:=admin}"
-: "${DEPLOY_SAMPLE_APP:=true}"            # register the guestbook demo app
+: "${DEPLOY_SAMPLE_APP:=true}"            # deploy the demo apps (podinfo + hello-web) through ArgoCD
+
+# --- GitOps (local folders instead of GitHub) ---
+: "${GITOPS_DIR:=${LAB_DIR}/gitops}"             # YOU edit this folder: app manifests + values files
+: "${GITOPS_REPO_DIR:=${LAB_DIR}/.lab-git}"      # generated git snapshot of GITOPS_DIR (do not edit)
+GIT_SERVER_URL="git://lab-git.lab-git.svc.cluster.local/gitops"   # how ArgoCD reaches that snapshot
 
 # --- Monitoring (in the cluster) ---
 : "${GRAFANA_PORT:=8082}";      : "${GRAFANA_NODEPORT:=30082}"
@@ -216,6 +222,10 @@ networking:
   apiServerPort: ${API_PORT}              # pinned so kubeconfig survives Docker restarts
 nodes:
   - role: control-plane
+    extraMounts:
+      # makes the local git snapshot visible inside the kind node at /lab/git
+      - hostPath: ${GITOPS_REPO_DIR}
+        containerPath: /lab/git
     extraPortMappings:
       - containerPort: ${ARGOCD_NODEPORT}       # ArgoCD
         hostPort: ${ARGOCD_PORT}
@@ -397,28 +407,111 @@ unclassified:
     url: "http://localhost:${JENKINS_PORT}/"
 EOF
 
-  # ----- sample ArgoCD application (proves ArgoCD <-> cluster works) --------
-  cat > "${LAB_DIR}/guestbook-app.yaml" <<'EOF'
-apiVersion: argoproj.io/v1alpha1
-kind: Application
+  # ----- GitOps folder with demo apps (created once, never overwritten) -----
+  seed_gitops
+}
+
+# Create the local GitOps folder with demo apps. Existing files are NEVER
+# overwritten, so your edits are safe.
+#
+# ONE FOLDER PER APPLICATION. Everything an app needs lives in its own folder:
+#   gitops/apps/<app-name>/
+# The folder name becomes the ArgoCD app name AND the Kubernetes namespace.
+# ArgoCD detects the type by what is inside the folder:
+#   Chart.yaml + values.yaml   -> Helm app (values.yaml is your values file)
+#   plain *.yaml files         -> plain Kubernetes manifests
+# To add an app: create a folder, then run `lab sync`. No other file is needed.
+seed_gitops() {
+  mkdir -p "${GITOPS_DIR}/apps/podinfo" "${GITOPS_DIR}/apps/hello-web" "$GITOPS_REPO_DIR"
+
+  # write the file only if it does not exist yet; content comes from stdin
+  seed_file() { [[ -e "$1" ]] || cat > "$1"; }
+
+  seed_file "${GITOPS_DIR}/README.md" <<'EOF'
+# GitOps folder
+
+This local folder is the "git repo" ArgoCD deploys from. No GitHub needed.
+
+    apps/
+      <app-name>/      one folder per application (folder name = app name = namespace)
+        ...            everything that app needs
+
+What goes inside an app folder:
+
+    Helm app           Chart.yaml (wraps a public chart) + values.yaml (your settings)
+    Plain YAML app     any number of *.yaml Kubernetes files
+
+Workflow: edit files here, then run `lab sync`. ArgoCD picks the change up.
+To add an app: create `apps/<name>/`, put files in it, run `lab sync`.
+To remove an app: delete its folder, run `lab sync`.
+Examples: apps/podinfo (Helm) and apps/hello-web (plain YAML).
+EOF
+
+  # --- demo app 1 (Helm): a public chart, wrapped in a tiny local chart so its
+  #     values file lives in the same folder ---
+  seed_file "${GITOPS_DIR}/apps/podinfo/Chart.yaml" <<'EOF'
+apiVersion: v2
+name: podinfo
+version: 0.1.0
+dependencies:
+  - name: podinfo                 # the real chart, downloaded by ArgoCD
+    version: 6.x.x
+    repository: https://stefanprodan.github.io/podinfo
+EOF
+
+  seed_file "${GITOPS_DIR}/apps/podinfo/values.yaml" <<EOF
+# Your settings for podinfo. Everything goes under the "podinfo:" key,
+# because the chart above is a dependency of this wrapper chart.
+# Edit, run \`lab sync\`, watch ArgoCD roll it out.
+podinfo:
+  replicaCount: 1
+  ui:
+    message: "Hello from DevOps Lab"
+    color: "#6d8bff"
+  service:
+    type: NodePort
+    nodePort: ${SPARE_NODEPORT}     # open it at http://localhost:${SPARE_PORT}
+EOF
+
+  # --- demo app 2 (plain YAML) ---
+  seed_file "${GITOPS_DIR}/apps/hello-web/hello-web.yaml" <<'EOF'
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: guestbook
-  namespace: argocd
+  name: hello-web-page
+data:
+  index.html: |
+    <h1>hello-web</h1><p>Deployed by ArgoCD from a local folder.</p>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-web
 spec:
-  project: default
-  source:
-    repoURL: https://github.com/argoproj/argocd-example-apps.git
-    targetRevision: HEAD
-    path: guestbook
-  destination:
-    server: https://kubernetes.default.svc   # "this" cluster
-    namespace: guestbook
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
+  replicas: 2
+  selector:
+    matchLabels: {app: hello-web}
+  template:
+    metadata:
+      labels: {app: hello-web}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports: [{containerPort: 80}]
+          volumeMounts:
+            - {name: page, mountPath: /usr/share/nginx/html}
+      volumes:
+        - name: page
+          configMap: {name: hello-web-page}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-web
+spec:
+  selector: {app: hello-web}
+  ports: [{port: 80, targetPort: 80}]
 EOF
 }
 
@@ -530,11 +623,141 @@ connect_argocd() {
   fi
 }
 
-# Deploy the sample app so you can see ArgoCD really managing this cluster.
-deploy_sample_app() {
-  log "Registering the sample ArgoCD application (guestbook)..."
-  kubectl --context "$CTX" apply -f "${LAB_DIR}/guestbook-app.yaml" >/dev/null \
-    || warn "Could not create the sample application."
+# ---- GitOps from local folders -------------------------------------------
+# ArgoCD can only read git repos, not plain folders. So the lab:
+#   1. copies your GITOPS_DIR into a small git repo (GITOPS_REPO_DIR) on every sync,
+#   2. mounts that repo into the kind node,
+#   3. runs a tiny "git daemon" pod ("lab-git") that serves it inside the cluster.
+# ArgoCD then clones git://lab-git.lab-git.svc.cluster.local/gitops like any repo.
+
+# Copy the folder into the snapshot repo and commit if anything changed.
+sync_gitops() {
+  [[ -d "$GITOPS_DIR" ]] || seed_gitops
+  local repo="${GITOPS_REPO_DIR}/gitops"
+  mkdir -p "$repo"
+  [[ -d "${repo}/.git" ]] || git -C "$repo" init -q -b main
+  rsync -a --delete --exclude '.git' "${GITOPS_DIR}/" "${repo}/"
+  git -C "$repo" add -A
+  if ! git -C "$repo" diff --cached --quiet; then
+    git -C "$repo" -c user.name="DevOps Lab" -c user.email="lab@localhost" \
+      commit -q -m "lab sync $(date '+%F %T')"
+    log "GitOps folder snapshot updated."
+  fi
+}
+
+# Ask ArgoCD to re-read the repo right now instead of waiting for its 3 min poll.
+refresh_gitops() {
+  kubectl --context "$CTX" -n argocd annotate applications --all \
+    argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+  # makes the ApplicationSet re-scan gitops/apps/ for new or removed folders
+  kubectl --context "$CTX" -n argocd annotate applicationset lab-apps \
+    argocd.argoproj.io/application-set-refresh=true --overwrite >/dev/null 2>&1 || true
+}
+
+# The in-cluster git server that serves the snapshot repo.
+install_git_server() {
+  log "Installing the in-cluster git server (lab-git)..."
+  kubectl --context "$CTX" apply -f - >/dev/null <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab-git
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-git
+  namespace: lab-git
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: lab-git}
+  template:
+    metadata:
+      labels: {app: lab-git}
+    spec:
+      containers:
+        - name: git-daemon
+          image: alpine/git:latest
+          command: ["sh", "-c"]
+          args:
+            - >-
+              apk add --no-cache git-daemon >/dev/null &&
+              git config --global --add safe.directory '*' &&
+              exec git daemon --reuseaddr --export-all --base-path=/repos
+              --listen=0.0.0.0 --port=9418 /repos
+          ports: [{containerPort: 9418}]
+          readinessProbe:
+            tcpSocket: {port: 9418}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - {name: repos, mountPath: /repos, readOnly: true}
+      volumes:
+        - name: repos
+          hostPath: {path: /lab/git, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab-git
+  namespace: lab-git
+spec:
+  selector: {app: lab-git}
+  ports: [{port: 9418, targetPort: 9418}]
+EOF
+  kubectl --context "$CTX" -n lab-git rollout status deploy/lab-git --timeout=180s \
+    || warn "lab-git is not ready yet; check: kubectl -n lab-git get pods"
+}
+
+# Connect ArgoCD to the local repo and start the app generator.
+deploy_gitops() {
+  install_git_server
+  log "Registering the local repo in ArgoCD and creating the app generator (lab-apps)..."
+  # An ApplicationSet turns every folder under gitops/apps/ into an ArgoCD app.
+  kubectl --context "$CTX" apply -f - >/dev/null <<EOF || warn "Could not register the GitOps repo."
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lab-gitops-repo
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  type: git
+  name: lab-gitops
+  url: ${GIT_SERVER_URL}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: lab-apps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: ${GIT_SERVER_URL}
+        revision: HEAD
+        directories:
+          - path: apps/*            # one app per folder
+  template:
+    metadata:
+      name: '{{ .path.basename }}'  # folder name = app name
+    spec:
+      project: default
+      source:
+        repoURL: ${GIT_SERVER_URL}
+        targetRevision: HEAD
+        path: '{{ .path.path }}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{ .path.basename }}'   # folder name = namespace
+      syncPolicy:
+        automated: {prune: true, selfHeal: true}
+        syncOptions: [CreateNamespace=true]
+EOF
 }
 
 # ---------------------------------------------------------------------------
@@ -672,10 +895,15 @@ print_banner() {
   row "Grafana"      "http://localhost:${GRAFANA_PORT}"      "${GRAFANA_USER} / ${GRAFANA_PASS}"  "http://127.0.0.1:${GRAFANA_PORT}/api/health"   "kind cluster"
   row "Prometheus"   "http://localhost:${PROMETHEUS_PORT}"   "(no login)"                         "http://127.0.0.1:${PROMETHEUS_PORT}/-/healthy" "kind cluster"
   row "Alertmanager" "http://localhost:${ALERTMANAGER_PORT}" "(no login)"                         "http://127.0.0.1:${ALERTMANAGER_PORT}/-/healthy" "kind cluster"
-  printf ' %s%-13s%s %-24s\n' "$BOLD" "Spare" "$RESET" "localhost:${SPARE_PORT}  ->  NodePort ${SPARE_NODEPORT}"
+  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then
+    row "Podinfo demo" "http://localhost:${SPARE_PORT}" "(no login)" "http://127.0.0.1:${SPARE_PORT}/healthz" "kind cluster (via ArgoCD)"
+  else
+    printf ' %s%-13s%s %-24s\n' "$BOLD" "Spare" "$RESET" "localhost:${SPARE_PORT}  ->  NodePort ${SPARE_NODEPORT}"
+  fi
   printf '%s──────────────────────────────────────────────────────────────────────────────%s\n' "$MAGENTA" "$RESET"
   printf ' %sK8s API%s      https://127.0.0.1:${API_PORT}   (context: %s)\n' "$BOLD" "$RESET" "$CTX"
   printf ' %sJenkins data%s %s\n' "$BOLD" "$RESET" "$JENKINS_HOME_DIR"
+  printf ' %sGitOps folder%s %s   (edit, then: lab sync)\n' "$BOLD" "$RESET" "$GITOPS_DIR"
   printf ' %sConfigs%s      %s\n' "$BOLD" "$RESET" "$LAB_DIR"
   printf '%s──────────────────────────────────────────────────────────────────────────────%s\n\n' "$MAGENTA" "$RESET"
 }
@@ -692,7 +920,7 @@ print_summary() {
     printf '\n%s━━ Nodes ━━%s\n' "$CYAN" "$RESET"
     kubectl --context "$CTX" get nodes || true
     printf '\n%s━━ Pods ━━%s\n' "$CYAN" "$RESET"
-    kubectl --context "$CTX" get pods -A 2>/dev/null | grep -E 'NAMESPACE|argocd|monitoring|guestbook' || true
+    kubectl --context "$CTX" get pods -A 2>/dev/null | grep -E 'NAMESPACE|argocd|monitoring|lab-git|podinfo|hello-web' || true
     printf '\n%s━━ NodePort services ━━%s\n' "$CYAN" "$RESET"
     kubectl --context "$CTX" get svc -A 2>/dev/null | grep -E 'NAMESPACE|NodePort' || true
     printf '\n%s━━ ArgoCD applications ━━%s\n' "$CYAN" "$RESET"
@@ -711,6 +939,7 @@ cmd_up() {
   ensure_docker
   check_docker_resources
   write_configs
+  sync_gitops          # the snapshot folder must exist before kind mounts it
   install_alias
 
   if cluster_exists; then
@@ -719,6 +948,9 @@ cmd_up() {
     # kind cannot change port mappings of a live cluster. Detect an old layout.
     if ! docker port "$NODE" "${ARGOCD_NODEPORT}/tcp" 2>/dev/null | grep -q ":${ARGOCD_PORT}$"; then
       die "Existing cluster uses an older port layout. Run './lab.sh destroy' then './lab.sh up'."
+    fi
+    if ! docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$NODE" 2>/dev/null | grep -q '/lab/git'; then
+      die "Existing cluster was created before local GitOps support. Run './lab.sh destroy' then './lab.sh up'."
     fi
   else
     local p
@@ -764,7 +996,7 @@ cmd_up() {
 
   # Connect ArgoCD to the cluster, to your Mac's CLI and to Jenkins.
   connect_argocd
-  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then deploy_sample_app; fi
+  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then deploy_gitops; fi
 
   log "Setup complete."
   print_summary
@@ -796,6 +1028,7 @@ cmd_start() {
   wait_for_cluster_workloads
   wait_for_jenkins
   connect_argocd
+  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then sync_gitops; refresh_gitops; fi
   print_summary
 }
 
@@ -817,6 +1050,16 @@ cmd_init() {
     cp "${LAB_DIR}/lab.env.example" "${LAB_DIR}/lab.env"
     log "Created ${LAB_DIR}/lab.env. Edit it, then run: lab configs (or lab up)."
   fi
+}
+
+# Push edits from the local GitOps folder to ArgoCD.
+cmd_sync() {
+  ensure_docker
+  cluster_exists || die "Cluster '${CLUSTER}' not found. Run: lab up"
+  sync_gitops
+  refresh_gitops
+  log "ArgoCD was asked to refresh. Watch it: argocd app list   (or http://localhost:${ARGOCD_PORT})"
+  print_summary
 }
 
 cmd_status() {
@@ -887,7 +1130,7 @@ print_destroy_plan() {
       printf '  %s✗%s Helm releases:\n' "$RED" "$RESET"
       helm --kube-context "$CTX" list -A --no-headers 2>/dev/null \
         | awk '{printf "        - %s  (namespace %s)\n", $1, $2}' || true
-      printf '  %s✗%s Namespaces: argocd, monitoring, guestbook and any you created\n' "$RED" "$RESET"
+      printf '  %s✗%s Namespaces: argocd, monitoring, lab-git, podinfo, hello-web and any you created\n' "$RED" "$RESET"
       printf '  %s✗%s Persistent data (Prometheus metrics, Grafana dashboards):\n' "$RED" "$RESET"
       kubectl --context "$CTX" get pvc -A --no-headers 2>/dev/null \
         | awk '{printf "        - %s/%s  (%s)\n", $1, $2, $5}' || true
@@ -913,6 +1156,7 @@ print_destroy_plan() {
     printf '  %s✓%s Local folder      %s  (%s). Add --purge to delete it\n' "$GREEN" "$RESET" "$JENKINS_HOME_DIR" "$size"
   fi
   printf '  %s✓%s Docker image      %s  (build cache)\n' "$GREEN" "$RESET" "$JENKINS_IMG"
+  printf '  %s✓%s GitOps folder     %s  (your apps and values files)\n' "$GREEN" "$RESET" "$GITOPS_DIR"
   printf '  %s✓%s Config files      %s  (kind, helm values, jenkins/)\n' "$GREEN" "$RESET" "$LAB_DIR"
   printf '  %s✓%s CLI tools         kind, kubectl, helm, k9s, argocd\n\n' "$GREEN" "$RESET"
 }
@@ -945,8 +1189,9 @@ case "${1:-}" in
   status)  cmd_status ;;
   creds)   cmd_creds ;;
   verify)  cmd_verify ;;
+  sync)    cmd_sync ;;
   init)    cmd_init ;;
   configs) write_configs; log "Config files written to ${LAB_DIR}" ;;
   destroy) cmd_destroy "${2:-}" ;;
-  *) echo "Usage: $0 {up|start|stop|status|creds|verify|init|configs|destroy [--purge]}"; exit 1 ;;
+  *) echo "Usage: $0 {up|start|stop|status|creds|verify|sync|init|configs|destroy [--purge]}"; exit 1 ;;
 esac

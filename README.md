@@ -28,9 +28,38 @@ DevOps Lab sets up a full CI/CD and GitOps environment on your laptop, for learn
 | 📈 **Grafana** | http://localhost:8082 | `admin` / `admin123` | kind cluster |
 | 🔥 **Prometheus** | http://localhost:8083 | none | kind cluster |
 | 🚨 **Alertmanager** | http://localhost:8084 | none | kind cluster |
-| 🧪 **Spare port** | http://localhost:9090 | none | NodePort `30090` for your own apps |
+| 🧪 **Podinfo demo** | http://localhost:9090 | none | kind cluster, deployed by ArgoCD from your local `gitops/` folder |
 
 > The logins above are for a localhost-only lab. Everything binds to `127.0.0.1`. Never reuse these passwords elsewhere.
+
+## 📂 GitOps from a local folder (no GitHub needed)
+
+**One folder per application.** Everything an app needs lives in its own folder under `gitops/apps/`:
+
+```
+gitops/apps/
+├── podinfo/            Helm app:   Chart.yaml + values.yaml
+│   ├── Chart.yaml
+│   └── values.yaml
+└── hello-web/          plain YAML app
+    └── hello-web.yaml
+```
+
+The folder name is the ArgoCD app name **and** the Kubernetes namespace. No separate Application file is needed: an ArgoCD ApplicationSet (`lab-apps`) turns every folder into an app.
+
+```bash
+nano gitops/apps/podinfo/values.yaml   # e.g. change ui.message
+lab sync                               # ArgoCD rolls the change out
+```
+
+| I want to... | Do this, then `lab sync` |
+|---|---|
+| Add a plain-YAML app | create `gitops/apps/<name>/` and put your `*.yaml` files in it |
+| Add a Helm app | create `gitops/apps/<name>/` with a `Chart.yaml` (copy podinfo's) and a `values.yaml` |
+| Change a setting | edit the app's `values.yaml` or YAML |
+| Remove an app | delete its folder |
+
+Your files are never overwritten by the lab. ArgoCD can only read git repos, so the lab copies the folder into a small git snapshot and serves it from a tiny in-cluster git server (`lab-git`). You never run git yourself. Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 🧭 Architecture
 
@@ -88,6 +117,7 @@ lab stop      # evening: Jenkins first, then the cluster. Data is kept
 | `lab status` | Containers, pods, services, URLs and logins |
 | `lab creds` | Just the URL and login table |
 | `lab verify` | Prove where each tool runs |
+| `lab sync` | Push edits from `gitops/` to ArgoCD |
 | `lab init` | Create your `lab.env` settings file |
 | `lab configs` | Regenerate config files only |
 | `lab destroy` | Delete the cluster and Jenkins container, keep `jenkins_wp/` |
@@ -99,15 +129,16 @@ Every command finishes with the same summary: containers, nodes, pods, NodePort 
 
 - **Jenkins ⇄ your disk.** The local folder `jenkins_wp/` is used by Jenkins only. It is the container's `/var/jenkins_home`, so you can browse its files from your Mac without logging into the container (jobs, plugins and settings also survive rebuilds).
 - **Jenkins ⇄ cluster.** The Jenkins container joins the `kind` Docker network and gets a kubeconfig pointing at `lab-control-plane:6443`.
-- **ArgoCD ⇄ cluster.** ArgoCD manages the cluster it runs in (`in-cluster`). A sample `guestbook` app is registered automatically so you can see it sync.
+- **ArgoCD ⇄ cluster.** ArgoCD manages the cluster it runs in (`in-cluster`). Two demo apps (`podinfo`, `hello-web`) are deployed automatically and show up in the ArgoCD UI.
 - **ArgoCD ⇄ CLI.** `lab up` and `lab start` log the `argocd` CLI in, both on your Mac and inside Jenkins.
 - **Prometheus ⇄ ArgoCD.** ArgoCD metrics are exposed through ServiceMonitors, which Prometheus picks up.
 
 ## 🧪 Try it
 
 ```bash
-argocd app list                     # the sample app
-kubectl get pods -n guestbook       # what ArgoCD deployed
+argocd app list                     # lab-apps, podinfo, hello-web
+kubectl get pods -n podinfo         # what ArgoCD deployed
+open http://localhost:9090          # the podinfo demo app
 ```
 
 A starter pipeline is in [examples/Jenkinsfile](examples/Jenkinsfile). Create a Pipeline job in Jenkins and paste it in.
@@ -121,7 +152,7 @@ A starter pipeline is in [examples/Jenkinsfile](examples/Jenkinsfile). Create a 
 ├── kind-config.yaml        # cluster + port mappings (generated)
 ├── argocd-values.yaml      # ArgoCD Helm values (generated)
 ├── monitoring-values.yaml  # Prometheus/Grafana Helm values (generated)
-├── guestbook-app.yaml      # sample ArgoCD Application (generated)
+├── gitops/                 # YOUR apps + Helm values files (edit these)
 ├── jenkins/                # Jenkins image: Dockerfile, plugins, JCasC (generated)
 ├── jenkins_wp/             # Jenkins home on your Mac (git-ignored)
 ├── examples/Jenkinsfile    # sample CI → ArgoCD pipeline

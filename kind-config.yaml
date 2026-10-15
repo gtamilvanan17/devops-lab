@@ -6,6 +6,10 @@ networking:
   apiServerPort: 6443              # pinned so kubeconfig survives Docker restarts
 nodes:
   - role: control-plane
+    extraMounts:
+      # makes the local git snapshot visible inside the kind node at /lab/git
+      - hostPath: /Users/tamilvanang/Desktop/DevOps-Lab/.lab-git
+        containerPath: /lab/git
     extraPortMappings:
       - containerPort: 30080       # ArgoCD
         hostPort: 8081
