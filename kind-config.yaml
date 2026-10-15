@@ -1,0 +1,29 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lab
+networking:
+  apiServerAddress: "127.0.0.1"
+  apiServerPort: 6443              # pinned so kubeconfig survives Docker restarts
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080       # ArgoCD
+        hostPort: 8081
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30082       # Grafana
+        hostPort: 8082
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30083       # Prometheus
+        hostPort: 8083
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30084       # Alertmanager
+        hostPort: 8084
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30090       # spare for your own apps
+        hostPort: 9090
+        listenAddress: "127.0.0.1"
+        protocol: TCP

@@ -1,0 +1,35 @@
+// Starter pipeline for the lab. Create a "Pipeline" job in Jenkins and paste this in.
+// It shows that Jenkins can reach Docker, Kubernetes and ArgoCD from inside its container.
+pipeline {
+  agent any
+
+  stages {
+    stage('Tools') {
+      steps {
+        sh 'docker version --format "docker server {{.Server.Version}}"'
+        sh 'kubectl version --client'
+        sh 'helm version --short'
+        sh 'argocd version --client'
+      }
+    }
+
+    stage('Cluster') {
+      steps {
+        // Uses /var/jenkins_home/.kube/config, kept fresh by lab.sh
+        sh 'kubectl get nodes'
+        sh 'kubectl get pods -A | head -20'
+      }
+    }
+
+    stage('ArgoCD') {
+      steps {
+        // ARGOCD_SERVER and ARGOCD_OPTS are already set in the container,
+        // and lab.sh logged the CLI in.
+        sh 'argocd cluster list'
+        sh 'argocd app list'
+        // Uncomment to sync the sample app:
+        // sh 'argocd app sync guestbook'
+      }
+    }
+  }
+}

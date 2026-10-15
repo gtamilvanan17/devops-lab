@@ -1,0 +1,13 @@
+# Jenkins home (jobs, secrets, kubeconfig) - never commit
+jenkins_wp/
+
+# temporary kubeconfig written by lab.sh
+.jenkins-kubeconfig
+*.kubeconfig
+lab-kubeconfig
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp

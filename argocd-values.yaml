@@ -1,0 +1,21 @@
+configs:
+  params:
+    server.insecure: true          # plain HTTP, fine for a localhost lab
+server:
+  service:
+    type: NodePort
+    nodePortHttp: 30080
+  metrics:                         # expose metrics so Prometheus scrapes ArgoCD
+    enabled: true
+    serviceMonitor:
+      enabled: true
+controller:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+repoServer:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true

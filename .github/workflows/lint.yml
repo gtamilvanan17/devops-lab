@@ -1,0 +1,19 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: bash -n lab.sh
+      - name: ShellCheck
+        run: shellcheck lab.sh
+      - name: Generate configs and validate YAML
+        run: |
+          ./lab.sh configs
+          python3 -c "import yaml,glob;[list(yaml.safe_load_all(open(f))) for f in glob.glob('*.yaml')+glob.glob('jenkins/*.yaml')]"

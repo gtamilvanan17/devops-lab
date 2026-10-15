@@ -1,0 +1,54 @@
+# Alertmanager: kept small, exposed on a NodePort so you can open its UI.
+alertmanager:
+  enabled: true
+  service:
+    type: NodePort
+    nodePort: 30084
+
+# node-exporter fails on kind inside Docker on macOS (mount propagation)
+nodeExporter:
+  enabled: false
+
+# kind control-plane components bind to localhost; these targets would just be red
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+grafana:
+  adminUser: admin
+  adminPassword: admin123
+  service:
+    type: NodePort
+    nodePort: 30082
+  persistence:
+    enabled: true
+    type: pvc
+    size: 2Gi
+
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30083
+  prometheusSpec:
+    retention: 3d
+    # scrape every ServiceMonitor/PodMonitor in the cluster (e.g. ArgoCD's)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 400Mi
+      limits:
+        memory: 1Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi

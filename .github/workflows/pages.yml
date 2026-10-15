@@ -1,0 +1,63 @@
+name: deploy-portfolio
+
+# Publishes the portfolio page in docs/ to GitHub Pages.
+# One-time setup: repo Settings > Pages > Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment at a time; let a running one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build site folder
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          mkdir _site
+          cp docs/index.html docs/robots.txt docs/sitemap.xml _site/
+          mkdir _site/assets
+          cp docs/assets/favicon.svg _site/assets/
+          # social preview image (PNG is what crawlers expect)
+          sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin
+          rsvg-convert -w 1200 -h 630 docs/assets/og-image.svg -o _site/assets/og-image.png
+          # fill in the real site and repository URLs
+          sed -i "s|__SITE_URL__|${SITE_URL%/}|g; s|__REPO_URL__|${REPO_URL}|g" \
+            _site/index.html _site/robots.txt _site/sitemap.xml
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
