@@ -378,6 +378,33 @@ EOF
 configs:
   params:
     server.insecure: true          # plain HTTP, fine for a localhost lab
+  cm:
+    exec.enabled: true             # web terminal: open a shell inside pods from the UI
+  rbac:
+    policy.csv: |
+      p, role:admin, exec, create, */*, allow
+# Lets the argocd-server service account open shells in pods (pods/exec).
+extraObjects:
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: argocd-server-exec
+    rules:
+      - apiGroups: [""]
+        resources: ["pods/exec"]
+        verbs: ["create"]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: argocd-server-exec
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: argocd-server-exec
+    subjects:
+      - kind: ServiceAccount
+        name: argocd-server
+        namespace: argocd
 server:
   service:
     type: NodePort

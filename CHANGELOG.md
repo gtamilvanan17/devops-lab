@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Every command now ends with a summary of containers, nodes, pods, NodePort services, ArgoCD apps and a URL/login table with live UP/DOWN status.
 - Demo apps (`podinfo` (Helm) and `hello-web` (plain YAML)) deployed through ArgoCD by default, visible in the ArgoCD UI.
 - Local-folder GitOps: edit `gitops/` and run `lab sync`. A small in-cluster git server (`lab-git`) serves a snapshot of the folder to ArgoCD, so no GitHub is needed. One folder per app under `gitops/apps/<name>/` (Helm wrapper chart or plain YAML); an ApplicationSet (`lab-apps`) turns each folder into an ArgoCD app, so adding an app needs no extra file.
+- ArgoCD web terminal enabled (open a shell in any pod from the ArgoCD UI).
 - Reworked issue and pull request templates (forms).
 - Live spinner with elapsed timer for every slow step (cluster, Helm installs, image build, waits), numbered steps, friendlier messages and a logo header. Full output is shown only when a step fails.
 - README banner with DevOps, SRE and platform tool logos; rounded badges.
