@@ -11,3 +11,4 @@ lab-kubeconfig
 .idea/
 .vscode/
 *.swp
+lab.env

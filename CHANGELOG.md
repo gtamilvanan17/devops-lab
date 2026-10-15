@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Alertmanager exposed on port 8084.
 - Every command now ends with a summary of containers, nodes, pods, NodePort services, ArgoCD apps and a URL/login table with live UP/DOWN status.
 - `lab destroy` lists what will be deleted and kept before asking for confirmation.
+- `lab.env` settings file (cluster name, ports, logins, Jenkins heap, sample-app toggle) with a global `~/.config/devops-lab/lab.env`, `lab init`, and validation of ports and cluster name.
 - `lab configs` command and `lab destroy --purge`.
 - `argocd` CLI in the Jenkins image.
 - Portfolio page, animated README, architecture and troubleshooting docs, sample Jenkinsfile, Makefile, CI lint workflow and community files.

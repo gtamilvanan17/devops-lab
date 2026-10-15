@@ -88,6 +88,7 @@ lab stop      # evening: Jenkins first, then the cluster. Data is kept
 | `lab status` | Containers, pods, services, URLs and logins |
 | `lab creds` | Just the URL and login table |
 | `lab verify` | Prove where each tool runs |
+| `lab init` | Create your `lab.env` settings file |
 | `lab configs` | Regenerate config files only |
 | `lab destroy` | Delete the cluster and Jenkins container, keep `jenkins_wp/` |
 | `lab destroy --purge` | Same, and wipe `jenkins_wp/` too |
@@ -115,6 +116,7 @@ A starter pipeline is in [examples/Jenkinsfile](examples/Jenkinsfile). Create a 
 
 ```
 .
+├── lab.env.example         # all settings (copy to lab.env)
 ├── lab.sh                  # the one script (heavily commented)
 ├── kind-config.yaml        # cluster + port mappings (generated)
 ├── argocd-values.yaml      # ArgoCD Helm values (generated)
@@ -131,7 +133,19 @@ Config files are regenerated from `lab.sh` (see the settings block at the top), 
 
 ## 🛠️ Customise
 
-Open `lab.sh` and edit the **SETTINGS** section: ports, passwords, cluster name. Changing a cluster port needs `lab destroy` then `lab up`, because kind cannot change port mappings on a live cluster.
+Your settings live in a plain `lab.env` file, so you never edit `lab.sh`:
+
+```bash
+lab init            # creates lab.env from lab.env.example
+nano lab.env        # e.g. CLUSTER=demo, JENKINS_PORT=9000, ARGOCD_PORT=9001
+lab destroy && lab up   # needed after changing ports or the cluster name
+```
+
+You can set the cluster name, every port, logins, Jenkins heap size and whether the sample app is deployed. See [lab.env.example](lab.env.example) for the full list.
+
+Files are read in this order, and later ones win: built-in defaults, then `~/.config/devops-lab/lab.env` (global, shared by every copy of the lab), then `./lab.env`, then the file named in `LAB_ENV_FILE`. Port numbers and the cluster name are validated before anything runs.
+
+> kind cannot change port mappings on a live cluster, so port or name changes need `lab destroy` first. Password or heap changes only need `lab configs && lab start`.
 
 ## 🩺 Troubleshooting
 

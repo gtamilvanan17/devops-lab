@@ -22,7 +22,7 @@
 #  ------------------------------------------
 #   8080  Jenkins        8081  ArgoCD        8082  Grafana
 #   8083  Prometheus     8084  Alertmanager  9090  spare (for your own apps)
-#   6443  Kubernetes API
+#   6443  Kubernetes API   (these are the defaults; change them in lab.env)
 #
 #  COMMANDS
 #  --------
@@ -32,6 +32,7 @@
 #   ./lab.sh status     show everything that is running
 #   ./lab.sh creds      show URLs and logins
 #   ./lab.sh verify     prove where each tool runs
+#   ./lab.sh init       create lab.env (your settings file) from the example
 #   ./lab.sh configs    (re)generate the config files only, touch nothing else
 #   ./lab.sh destroy    delete cluster + Jenkins container (keeps ./jenkins_wp)
 #   ./lab.sh destroy --purge   same, and also wipe ./jenkins_wp
@@ -49,7 +50,7 @@ set -Eeuo pipefail
 LAB_VERSION="1.1.0"
 
 # ---------------------------------------------------------------------------
-# 1. SETTINGS  (the only section you normally need to edit)
+# 1. SETTINGS  (defaults; override them in lab.env, no need to edit this file)
 # ---------------------------------------------------------------------------
 
 # The folder this script lives in. All config files and Jenkins data go here,
@@ -57,32 +58,70 @@ LAB_VERSION="1.1.0"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 LAB_DIR="$(dirname "$SELF")"
 
+# Your personal settings live in a plain KEY=value file, so you never have to
+# edit this script. Files are read in this order (later ones win):
+#   1. built-in defaults (below)
+#   2. ~/.config/devops-lab/lab.env   (global: shared by every copy of the lab)
+#   3. <lab folder>/lab.env           (local: this copy only)
+#   4. the file named in LAB_ENV_FILE (optional, e.g. LAB_ENV_FILE=~/work.env ./lab.sh up)
+# See lab.env.example for every setting. Create your file with: ./lab.sh init
+load_env() {
+  local f
+  for f in "${HOME}/.config/devops-lab/lab.env" "${LAB_DIR}/lab.env" "${LAB_ENV_FILE:-}"; do
+    [[ -n "$f" && -f "$f" ]] || continue
+    set -a          # every variable assigned while sourcing becomes exported
+    # shellcheck disable=SC1090
+    source "$f"
+    set +a
+  done
+}
+load_env
+
 # --- kind cluster ---
-CLUSTER="lab"
-NODE="${CLUSTER}-control-plane"   # name of the Docker container kind creates
-CTX="kind-${CLUSTER}"             # kubectl context name kind creates
-KIND_NET="kind"                   # Docker network shared by kind and Jenkins
+: "${CLUSTER:=lab}"                       # cluster name
+: "${API_PORT:=6443}"                     # Kubernetes API port on your Mac
+KIND_NET="kind"                           # Docker network shared by kind and Jenkins (fixed by kind)
 
 # --- Jenkins (runs as a normal Docker container, NOT in the cluster) ---
-JENKINS_CT="lab-jenkins"
-JENKINS_IMG="lab-jenkins:latest"
-JENKINS_PORT=8080
-JENKINS_USER="admin"
-JENKINS_PASS="admin123"           # lab only, never reuse
-JENKINS_HOME_DIR="${LAB_DIR}/jenkins_wp"   # bind-mounted to /var/jenkins_home
+: "${JENKINS_CT:=lab-jenkins}"            # container name
+: "${JENKINS_IMG:=lab-jenkins:latest}"    # image name
+: "${JENKINS_PORT:=8080}"                 # port on your Mac
+: "${JENKINS_USER:=admin}"
+: "${JENKINS_PASS:=admin123}"             # lab only, never reuse
+: "${JENKINS_HEAP:=1g}"                   # Java max heap
+: "${JENKINS_HOME_DIR:=${LAB_DIR}/jenkins_wp}"   # bind-mounted to /var/jenkins_home
 
 # --- ArgoCD (in the cluster) ---
-ARGOCD_PORT=8081                  # port on your Mac
-ARGOCD_NODEPORT=30080             # port on the kind node (ArgoCD service)
-ARGOCD_USER="admin"
+: "${ARGOCD_PORT:=8081}"                  # port on your Mac
+: "${ARGOCD_NODEPORT:=30080}"             # port on the kind node (ArgoCD service)
+: "${ARGOCD_USER:=admin}"
+: "${DEPLOY_SAMPLE_APP:=true}"            # register the guestbook demo app
 
 # --- Monitoring (in the cluster) ---
-GRAFANA_PORT=8082;      GRAFANA_NODEPORT=30082
-PROMETHEUS_PORT=8083;   PROMETHEUS_NODEPORT=30083
-ALERTMANAGER_PORT=8084; ALERTMANAGER_NODEPORT=30084
-GRAFANA_USER="admin"
-GRAFANA_PASS="admin123"           # lab only, never reuse
-SPARE_PORT=9090;        SPARE_NODEPORT=30090
+: "${GRAFANA_PORT:=8082}";      : "${GRAFANA_NODEPORT:=30082}"
+: "${PROMETHEUS_PORT:=8083}";   : "${PROMETHEUS_NODEPORT:=30083}"
+: "${ALERTMANAGER_PORT:=8084}"; : "${ALERTMANAGER_NODEPORT:=30084}"
+: "${GRAFANA_USER:=admin}"
+: "${GRAFANA_PASS:=admin123}"             # lab only, never reuse
+: "${SPARE_PORT:=9090}";        : "${SPARE_NODEPORT:=30090}"
+
+# Names kind derives from the cluster name.
+NODE="${CLUSTER}-control-plane"           # Docker container kind creates
+CTX="kind-${CLUSTER}"                     # kubectl context kind creates
+
+# Fail early on a typo like ARGOCD_PORT=80a1.
+validate_settings() {
+  local v
+  for v in API_PORT JENKINS_PORT ARGOCD_PORT ARGOCD_NODEPORT GRAFANA_PORT GRAFANA_NODEPORT \
+           PROMETHEUS_PORT PROMETHEUS_NODEPORT ALERTMANAGER_PORT ALERTMANAGER_NODEPORT \
+           SPARE_PORT SPARE_NODEPORT; do
+    [[ "${!v}" =~ ^[0-9]+$ ]] && (( ${!v} >= 1 && ${!v} <= 65535 )) \
+      || { printf 'ERROR: %s must be a port number (1-65535), got "%s"\n' "$v" "${!v}" >&2; exit 1; }
+  done
+  [[ "$CLUSTER" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
+    || { printf 'ERROR: CLUSTER must be lowercase letters, digits and dashes, got "%s"\n' "$CLUSTER" >&2; exit 1; }
+}
+validate_settings
 
 # ---------------------------------------------------------------------------
 # 2. PRETTY OUTPUT HELPERS
@@ -174,7 +213,7 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CLUSTER}
 networking:
   apiServerAddress: "127.0.0.1"
-  apiServerPort: 6443              # pinned so kubeconfig survives Docker restarts
+  apiServerPort: ${API_PORT}              # pinned so kubeconfig survives Docker restarts
 nodes:
   - role: control-plane
     extraPortMappings:
@@ -543,7 +582,7 @@ create_jenkins() {
     ${sock_args[@]+"${sock_args[@]}"} \
     -e "JENKINS_ADMIN_ID=${JENKINS_USER}" \
     -e "JENKINS_ADMIN_PASSWORD=${JENKINS_PASS}" \
-    -e "JAVA_OPTS=-Djenkins.install.runSetupWizard=false -Xmx1g" \
+    -e "JAVA_OPTS=-Djenkins.install.runSetupWizard=false -Xmx${JENKINS_HEAP}" \
     -e "KUBECONFIG=/var/jenkins_home/.kube/config" \
     -e "ARGOCD_SERVER=${NODE}:${ARGOCD_NODEPORT}" \
     -e "ARGOCD_OPTS=--plaintext --grpc-web" \
@@ -569,7 +608,7 @@ reconcile_jenkins() {
 }
 
 # Give Jenkins a kubeconfig that reaches the cluster over the shared Docker
-# network ("--internal" swaps 127.0.0.1:6443 for lab-control-plane:6443).
+# network ("--internal" swaps 127.0.0.1:${API_PORT} for ${NODE}:6443).
 sync_jenkins_kubeconfig() {
   local f="${LAB_DIR}/.jenkins-kubeconfig"
   kind get kubeconfig --name "$CLUSTER" --internal > "$f"
@@ -635,7 +674,7 @@ print_banner() {
   row "Alertmanager" "http://localhost:${ALERTMANAGER_PORT}" "(no login)"                         "http://127.0.0.1:${ALERTMANAGER_PORT}/-/healthy" "kind cluster"
   printf ' %s%-13s%s %-24s\n' "$BOLD" "Spare" "$RESET" "localhost:${SPARE_PORT}  ->  NodePort ${SPARE_NODEPORT}"
   printf '%s──────────────────────────────────────────────────────────────────────────────%s\n' "$MAGENTA" "$RESET"
-  printf ' %sK8s API%s      https://127.0.0.1:6443   (context: %s)\n' "$BOLD" "$RESET" "$CTX"
+  printf ' %sK8s API%s      https://127.0.0.1:${API_PORT}   (context: %s)\n' "$BOLD" "$RESET" "$CTX"
   printf ' %sJenkins data%s %s\n' "$BOLD" "$RESET" "$JENKINS_HOME_DIR"
   printf ' %sConfigs%s      %s\n' "$BOLD" "$RESET" "$LAB_DIR"
   printf '%s──────────────────────────────────────────────────────────────────────────────%s\n\n' "$MAGENTA" "$RESET"
@@ -683,7 +722,7 @@ cmd_up() {
     fi
   else
     local p
-    for p in 6443 "$ARGOCD_PORT" "$GRAFANA_PORT" "$PROMETHEUS_PORT" "$ALERTMANAGER_PORT" "$SPARE_PORT"; do
+    for p in "$API_PORT" "$ARGOCD_PORT" "$GRAFANA_PORT" "$PROMETHEUS_PORT" "$ALERTMANAGER_PORT" "$SPARE_PORT"; do
       if port_in_use "$p"; then
         die "Port ${p} is already in use on your Mac. Free it, or edit the ports at the top of lab.sh."
       fi
@@ -725,7 +764,7 @@ cmd_up() {
 
   # Connect ArgoCD to the cluster, to your Mac's CLI and to Jenkins.
   connect_argocd
-  deploy_sample_app
+  if [[ "$DEPLOY_SAMPLE_APP" == "true" ]]; then deploy_sample_app; fi
 
   log "Setup complete."
   print_summary
@@ -770,6 +809,16 @@ cmd_stop() {
   print_summary
 }
 
+# Create lab.env from the example so you can start editing it.
+cmd_init() {
+  if [[ -f "${LAB_DIR}/lab.env" ]]; then
+    log "lab.env already exists: ${LAB_DIR}/lab.env"
+  else
+    cp "${LAB_DIR}/lab.env.example" "${LAB_DIR}/lab.env"
+    log "Created ${LAB_DIR}/lab.env. Edit it, then run: lab configs (or lab up)."
+  fi
+}
+
 cmd_status() {
   ensure_docker
   print_summary
@@ -809,7 +858,7 @@ cmd_verify() {
 
   log "5) Host ports are owned by the Docker runtime:"
   lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
-    | grep -E ":(6443|${JENKINS_PORT}|${ARGOCD_PORT}|${GRAFANA_PORT}|${PROMETHEUS_PORT}|${ALERTMANAGER_PORT}|${SPARE_PORT}) " \
+    | grep -E ":(${API_PORT}|${JENKINS_PORT}|${ARGOCD_PORT}|${GRAFANA_PORT}|${PROMETHEUS_PORT}|${ALERTMANAGER_PORT}|${SPARE_PORT}) " \
     | awk '{printf "   %-27s %s\n", $1, $9}' || true
 
   log "6) CLI tools on the Mac:"
@@ -896,7 +945,8 @@ case "${1:-}" in
   status)  cmd_status ;;
   creds)   cmd_creds ;;
   verify)  cmd_verify ;;
+  init)    cmd_init ;;
   configs) write_configs; log "Config files written to ${LAB_DIR}" ;;
   destroy) cmd_destroy "${2:-}" ;;
-  *) echo "Usage: $0 {up|start|stop|status|creds|verify|configs|destroy [--purge]}"; exit 1 ;;
+  *) echo "Usage: $0 {up|start|stop|status|creds|verify|init|configs|destroy [--purge]}"; exit 1 ;;
 esac
